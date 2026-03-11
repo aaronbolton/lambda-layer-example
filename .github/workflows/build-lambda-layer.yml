@@ -1,0 +1,108 @@
+name: Build pyodbc Lambda Layer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create a release and upload assets
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Step 1 ─────────────────────────────────────────────────────────────
+      - name: Step 1 – Pull Lambda base image
+        run: docker pull public.ecr.aws/lambda/python:3.14
+
+      # ── Step 2 ─────────────────────────────────────────────────────────────
+      - name: Step 2 – Create layer directory
+        run: mkdir -p lambda-layer/python
+
+      # ── Step 3 ─────────────────────────────────────────────────────────────
+      - name: Step 3 – Build layer inside Docker
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            -v "$PWD/lambda-layer":/var/task \
+            public.ecr.aws/lambda/python:3.14 \
+            -c "
+              set -euo pipefail
+
+              # Install unixODBC
+              dnf install -y unixODBC unixODBC-devel
+
+              # Add Microsoft repo and install ODBC Driver 18
+              curl https://packages.microsoft.com/config/rhel/9/prod.repo \
+                > /etc/yum.repos.d/mssql-release.repo
+              ACCEPT_EULA=Y dnf install -y msodbcsql18
+
+              # Install pyodbc into the python/ directory
+              pip install pyodbc -t /var/task/python
+
+              # Copy shared libraries
+              mkdir -p /var/task/lib
+              cp /usr/lib64/libodbc.so.2          /var/task/lib/
+              cp /usr/lib64/libodbcinst.so.2      /var/task/lib/
+              cp /opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.*.so.* /var/task/lib/
+
+              # Copy ODBC config files
+              mkdir -p /var/task/odbcinst
+              cp /opt/microsoft/msodbcsql18/etc/odbcinst.ini /var/task/odbcinst/
+            "
+
+      # ── Step 4 ─────────────────────────────────────────────────────────────
+      - name: Step 4 – Zip the layer
+        run: |
+          cd lambda-layer
+          zip -r ../pyodbc-layer.zip .
+          cd ..
+
+      # ── Publish ────────────────────────────────────────────────────────────
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: pyodbc Lambda Layer ${{ steps.tag.outputs.value }}
+          body: |
+            Automated build of the **pyodbc Lambda Layer** for Python 3.14 (Amazon Linux 2023).
+
+            ### Contents
+            | Path | Description |
+            |------|-------------|
+            | `python/` | `pyodbc` Python package |
+            | `lib/libodbc.so.2` | unixODBC runtime |
+            | `lib/libodbcinst.so.2` | unixODBC installer runtime |
+            | `lib/libmsodbcsql-18.x.so.x` | Microsoft ODBC Driver 18 for SQL Server |
+            | `odbcinst/odbcinst.ini` | ODBC driver configuration |
+
+            ### Next step
+            Publish to AWS with:
+            ```bash
+            aws lambda publish-layer-version \
+              --layer-name pyodbc-layer \
+              --zip-file fileb://pyodbc-layer.zip \
+              --compatible-runtimes python3.14 \
+              --region us-east-1
+            ```
+          files: pyodbc-layer.zip
+          fail_on_unmatched_files: true
