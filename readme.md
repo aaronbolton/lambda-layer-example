@@ -93,7 +93,7 @@ aws lambda publish-layer-version \
   --layer-name pyodbc-layer \
   --zip-file fileb://pyodbc-layer.zip \
   --compatible-runtimes python3.14 \
-  --region us-east-1
+  --region eu-west-1
 ```
 
 Copy the `LayerVersionArn` from the output — you'll need it in the next step.
@@ -105,7 +105,7 @@ Copy the `LayerVersionArn` from the output — you'll need it in the next step.
 ```bash
 aws lambda update-function-configuration \
   --function-name your-function-name \
-  --layers arn:aws:lambda:us-east-1:123456789012:layer:pyodbc-layer:1
+  --layers arn:aws:lambda:eu-west-1:123456789012:layer:pyodbc-layer:1
 ```
 
 ---
